@@ -12,11 +12,13 @@ data/
 *.flac
 
 models/
+!phone_detection/models/
 *.ckpt
 *.pt
 *.pth
 *.h5
 *.onnx
+!phone_detection/models/*.pt
 
 reports/*.pkl
 
