@@ -1,0 +1,19 @@
+LFW IDENTITY VERIFICATION EVALUATION
+=============================================
+
+Threshold: 0.3821803629398346
+Accuracy: 0.9918887601390498
+Precision: 1.0
+Recall: 0.9833333333333333
+F1 Score: 0.9915966386554622
+ROC AUC: 0.9952488444587768
+FAR: 0.0
+FRR: 0.016666666666666666
+True Negatives: 443
+False Positives: 0
+False Negatives: 7
+True Positives: 413
+Total DevTest Pairs: 1000
+Scorable DevTest Pairs: 863
+DevTest Coverage: 0.863
+Unscorable DevTest Pairs: 137
