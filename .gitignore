@@ -16,11 +16,13 @@ data/
 
 # Model weights
 models/
+!phone_detection/models/
 *.ckpt
 *.pt
 *.pth
 *.h5
 *.onnx
+!phone_detection/models/*.pt
 
 # Generated reports
 reports/
