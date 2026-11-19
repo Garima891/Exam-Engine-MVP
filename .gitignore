@@ -1,0 +1,15 @@
+# Local MVP biometric database. Embeddings are not encrypted.
+integration/candidate_embeddings.sqlite3
+integration/candidate_embeddings.sqlite3-shm
+integration/candidate_embeddings.sqlite3-wal
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+
+# Local databases and backups
+*.sqlite3
+*.db
