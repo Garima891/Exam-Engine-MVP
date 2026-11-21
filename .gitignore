@@ -13,3 +13,6 @@ __pycache__/
 # Local databases and backups
 *.sqlite3
 *.db
+integration/proctoring_event_history.jsonl
+
+*.wav

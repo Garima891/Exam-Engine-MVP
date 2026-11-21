@@ -1,0 +1,9 @@
+torch
+torchaudio
+speechbrain
+soundfile
+sounddevice
+numpy
+tensorflow
+tensorflow-hub
+silero-vad

@@ -1,0 +1,5 @@
+﻿file,start,end,label
+test_same.wav,0,0,clean
+test_other.wav,20,40,speaker
+test_phone.wav,12,15,phone
+test_phone.wav,27,30,phone

@@ -9,6 +9,7 @@ import numpy as np
 from integration.candidate_identity import CandidateIdentityService
 from integration.candidate_storage import CandidateStorage
 from integration.module_adapters.face_identity import FaceIdentityAdapter
+from integration.tests.biometric_fakes import FakeBiometricProtector
 
 
 class FakeFaceAdapter:
@@ -34,7 +35,10 @@ class CandidateIdentityTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.tempdir.name) / "candidates.sqlite3"
-        self.storage = CandidateStorage(self.database_path)
+        self.storage = CandidateStorage(
+            self.database_path,
+            biometric_protector=FakeBiometricProtector(),
+        )
 
     def tearDown(self):
         self.tempdir.cleanup()

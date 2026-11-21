@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Proctored Exam Engine — Code-Derived Architecture</title>
+  <style>
+    :root {
+      --bg:#07111f;--panel:#0d1b2e;--panel2:#11243b;--line:#294663;
+      --text:#edf6ff;--muted:#9fb3c8;--blue:#58a6ff;--cyan:#43d7d0;
+      --purple:#a78bfa;--green:#55d98b;--orange:#ffb454;--red:#ff6b72;
+      --yellow:#f7dd78;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at 20% 0%,#102847 0,#07111f 42%,#050b14 100%);color:var(--text);font-family:"Segoe UI",system-ui,sans-serif}
+    a{color:#8bc4ff}
+    .header{position:sticky;top:0;z-index:30;padding:18px 28px;background:rgba(7,17,31,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}
+    .header h1{margin:0;font-size:24px}.header p{margin:5px 0 0;color:var(--muted)}
+    .layout{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:calc(100vh - 74px)}
+    nav{position:sticky;top:74px;height:calc(100vh - 74px);overflow:auto;padding:18px;border-right:1px solid var(--line);background:rgba(8,19,33,.72)}
+    nav h3{font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.12em}
+    nav a{display:block;padding:8px 10px;margin:3px 0;border-radius:7px;text-decoration:none;color:#bdcde0}
+    nav a:hover{background:#15314d;color:white}
+    main{padding:24px}
+    .hero{display:grid;grid-template-columns:1.4fr .6fr;gap:16px;margin-bottom:18px}
+    .card,.diagram-section{background:linear-gradient(145deg,rgba(17,36,59,.96),rgba(10,25,43,.96));border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.18)}
+    .card{padding:18px}.card h2,.diagram-section h2{margin-top:0}
+    .kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+    .kpi{padding:12px;border-radius:9px;border:1px solid var(--line);background:#0b1a2b}.kpi b{display:block;font-size:22px;color:var(--cyan)}
+    .status{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;background:#15324a;color:#cfe7ff}
+    .status.gap{background:#4a2e1b;color:#ffd39a}.status.no{background:#4a2028;color:#ffc1c5}
+    .diagram-section{margin:18px 0;padding:14px}
+    .diagram-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .diagram-head h2{font-size:18px}
+    .toolbar{display:flex;flex-wrap:wrap;gap:6px}.toolbar button,.toolbar input{border:1px solid var(--line);background:#10243a;color:var(--text);border-radius:7px;padding:7px 9px}
+    .toolbar input{min-width:180px}.toolbar button:hover{background:#183653}
+    .viewport{height:520px;margin-top:10px;overflow:hidden;border:1px solid #1f3a55;border-radius:10px;background:linear-gradient(135deg,#091526,#0d1d30);position:relative;cursor:grab}
+    .viewport svg{width:100%;height:100%;display:block}
+    .node{cursor:pointer;transition:opacity .15s,filter .15s}.node rect{stroke-width:2}.node text{pointer-events:none;fill:var(--text);font-size:12px}
+    .node .title{font-size:14px;font-weight:700}.node.ui rect{fill:#17314d;stroke:#58a6ff}.node.process rect{fill:#18334a;stroke:#43d7d0}.node.ai rect{fill:#2b2850;stroke:#a78bfa}.node.db rect{fill:#183f38;stroke:#55d98b}.node.security rect{fill:#493128;stroke:#ffb454}.node.event rect{fill:#4b2431;stroke:#ff6b72}.node.external rect{fill:#3a3a49;stroke:#c4cad4}.node.thread rect{fill:#1e3c58;stroke:#78b7ff}
+    .edge{fill:none;stroke:#7890a6;stroke-width:2;marker-end:url(#arrow)}.edge.accent{stroke:#43d7d0}.edge.hot{stroke:#ffb454}.edge.red{stroke:#ff6b72}
+    .node.dim{opacity:.18}.node.match{filter:drop-shadow(0 0 7px #43d7d0)}
+    .details{position:absolute;right:12px;bottom:12px;width:min(360px,calc(100% - 24px));max-height:235px;overflow:auto;background:rgba(5,14,24,.97);border:1px solid var(--line);border-radius:10px;padding:12px;display:none}
+    .details.show{display:block}.details h3{margin:0 0 6px;color:var(--cyan)}.details p{margin:5px 0;color:#c9d7e6;font-size:12px}.details code{color:#aadaff}
+    .legend{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.legend span{font-size:12px;padding:5px 8px;border-radius:999px;border:1px solid var(--line)}
+    .legend .ui{color:#58a6ff}.legend .process{color:#43d7d0}.legend .ai{color:#a78bfa}.legend .db{color:#55d98b}.legend .security{color:#ffb454}.legend .event{color:#ff6b72}.legend .thread{color:#78b7ff}
+    .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:left}th{color:#bcd3ea}
+    .source-index{columns:2;gap:24px}.source-index a{display:block;break-inside:avoid;margin:4px 0;font-size:13px}
+    pre{white-space:pre-wrap;color:#c9d7e6;font-size:12px}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.layout nav{position:relative;top:0;height:auto}.hero{grid-template-columns:1fr}.grid2,.grid3{grid-template-columns:1fr}.source-index{columns:1}.viewport{height:430px}}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>AI Proctored Exam Engine</h1>
+    <p>Code-derived system architecture · Integration branch · SQLite local MVP · Native HTML/SVG</p>
+  </header>
+  <div class="layout">
+    <nav>
+      <h3>Report</h3>
+      <a href="#overview">Overview</a>
+      <a href="#d1">1 · High-Level</a><a href="#d2">2 · Module Integration</a>
+      <a href="#d3">3 · Registration</a><a href="#d4">4 · Exam Initialization</a>
+      <a href="#d5">5 · Face Identity</a><a href="#d6">6 · Phone Detection</a>
+      <a href="#d7">7 · Audio Pipeline</a><a href="#d8">8 · Events</a>
+      <a href="#d9">9 · Storage</a><a href="#d10">10 · Runtime</a>
+      <h3>Reference</h3><a href="#modules">Modules</a><a href="#gaps">Gaps</a><a href="#sources">Source Index</a>
+    </nav>
+    <main>
+      <section id="overview" class="hero">
+        <div class="card">
+          <h2>Architecture Overview</h2>
+          <p>This report describes the implementation found in the repository. The Tkinter application owns student registration and a separate registered-student workflow. Registration captures face frames and a voice embedding. The live monitor uses a unique exam session, one <code>CameraManager</code>, a YOLO phone adapter, a MediaPipe/SFace identity adapter, and an isolated audio worker.</p>
+          <p><span class="status">DIRECTLY IMPLEMENTED</span> Student/face/voice storage, session and event tables, face/phone adapters, five-observation event confirmation, and live monitor subprocess.</p>
+        </div>
+        <div class="card kpis">
+          <div class="kpi"><b>50</b>Python files inspected (41 in integration, 9 supporting voice files)</div>
+          <div class="kpi"><b>10</b>Required architecture diagrams</div>
+          <div class="kpi"><b>5</b>Five-observation event threshold</div>
+          <div class="kpi"><b>128 / 192</b>Face / ECAPA embedding dimensions</div>
+        </div>
+      </section>
+
+      <div class="legend">
+        <span class="ui">■ UI</span><span class="process">■ Processing</span><span class="ai">■ AI/ML</span><span class="db">■ Database</span><span class="security">■ Security</span><span class="event">■ Events</span><span class="thread">■ Thread/worker</span>
+      </div>
+
+      <section id="d1" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>1. High-Level System Architecture</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#7890a6"/></marker></defs>
+          <g class="nodes">
+            <g class="node ui" data-id="app" data-title="ExamEngineApp" data-desc="Tkinter application entry point and UI owner." data-input="User actions" data-output="Registration data, session launch"><rect x="40" y="210" width="180" height="84" rx="12"/><text x="58" y="244" class="title">Tkinter ExamEngineApp</text><text x="58" y="266">exam_app.py</text><text x="58" y="282">main / __init__</text></g>
+            <g class="node db" data-id="storage" data-title="CandidateStorage" data-desc="SQLite schema, DPAPI sealing/opening, registrations, sessions and event persistence." data-input="Candidate/student/session IDs" data-output="Records, embeddings, events"><rect x="300" y="210" width="180" height="84" rx="12"/><text x="318" y="244" class="title">CandidateStorage</text><text x="318" y="266">candidate_storage.py</text><text x="318" y="282">SQLite + DPAPI</text></g>
+            <g class="node process" data-id="live" data-title="LiveProctoringDemo" data-desc="Unifies camera, vision, audio and event rendering in the live OpenCV monitor." data-input="Candidate biometrics and session ID" data-output="Annotated frames and events"><rect x="560" y="210" width="210" height="84" rx="12"/><text x="578" y="244" class="title">Live Proctoring Monitor</text><text x="578" y="266">live_demo.py</text><text x="578" y="282">LiveProctoringDemo.run()</text></g>
+            <g class="node ai" data-id="vision" data-title="Vision adapters" data-desc="Phone YOLO and face MediaPipe/SFace run on the same webcam frame." data-input="BGR frame" data-output="Phone/face structured results"><rect x="850" y="70" width="210" height="84" rx="12"/><text x="868" y="104" class="title">Vision AI Adapters</text><text x="868" y="126">Phone + Face Identity</text><text x="868" y="142">Ultralytics / MediaPipe</text></g>
+            <g class="node thread" data-id="audio" data-title="Isolated audio worker" data-desc="Subprocess in the configured Python 3.11 audio environment." data-input="Speaker reference, microphone blocks" data-output="VAD/speaker/sound JSON"><rect x="850" y="210" width="210" height="84" rx="12"/><text x="868" y="244" class="title">Audio Worker</text><text x="868" y="266">audio_worker.py</text><text x="868" y="282">Separate Python process</text></g>
+            <g class="node event" data-id="events" data-title="ProctoringEventEngine" data-desc="Independent five-observation counters and timestamped events." data-input="Valid module evidence" data-output="Observed/confirmed events"><rect x="850" y="350" width="210" height="84" rx="12"/><text x="868" y="384" class="title">Event Engine</text><text x="868" y="406">proctoring_events.py</text><text x="868" y="422">Session-scoped counters</text></g>
+          </g>
+          <path class="edge accent" d="M220 252 H300"/><path class="edge" d="M480 252 H560"/><path class="edge accent" d="M770 235 C810 210 820 150 850 112"/><path class="edge" d="M770 252 H850"/><path class="edge hot" d="M770 275 C815 300 820 370 850 392"/>
+          <path class="edge" d="M480 280 C560 330 820 330 850 392"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d2" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>2. Complete Module Integration Architecture</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 560" data-zoom-group>
+          <defs><marker id="arrow2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#7890a6"/></marker></defs>
+          <g class="nodes">
+            <g class="node thread" data-id="camera" data-title="CameraManager" data-desc="Only camera owner in live monitor." data-input="Camera index 0" data-output="640×480 BGR frame"><rect x="40" y="220" width="170" height="80" rx="12"/><text x="58" y="254" class="title">CameraManager</text><text x="58" y="276">camera_manager.py</text></g>
+            <g class="node process" data-id="vision-executor" data-title="vision_executor" data-desc="One-worker ThreadPoolExecutor processes the latest frame copy." data-input="BGR frame copy" data-output="Latest vision result"><rect x="260" y="220" width="180" height="80" rx="12"/><text x="278" y="254" class="title">vision_executor</text><text x="278" y="276">ThreadPoolExecutor</text></g>
+            <g class="node ai" data-id="phone-adapter" data-title="PhoneDetectionAdapter" data-desc="Loads phone_v2_best.pt and runs YOLO at confidence 0.50, image size 416." data-input="BGR frame" data-output="Detection boxes"><rect x="500" y="70" width="200" height="84" rx="12"/><text x="518" y="104" class="title">Phone Adapter</text><text x="518" y="126">PhoneDetectionAdapter</text></g>
+            <g class="node ai" data-id="face-adapter" data-title="FaceIdentityAdapter" data-desc="MediaPipe FaceLandmarker and OpenCV SFace; maximum five faces; threshold 0.3822." data-input="BGR frame + exact candidate references" data-output="Per-face MATCH/MISMATCH"><rect x="500" y="220" width="200" height="84" rx="12"/><text x="518" y="254" class="title">Face Identity Adapter</text><text x="518" y="276">FaceIdentityAdapter</text></g>
+            <g class="node ai" data-id="audio-adapter" data-title="AudioAdapter" data-desc="Assembles VAD, speaker, and YAMNet sound results." data-input="3-second 16 kHz window" data-output="Independent audio result"><rect x="500" y="370" width="200" height="84" rx="12"/><text x="518" y="404" class="title">Audio Adapter</text><text x="518" y="426">module_adapters/audio.py</text></g>
+            <g class="node thread" data-id="microphone" data-title="MicrophoneManager" data-desc="Owns a single sounddevice input stream and bounded four-block queue." data-input="16 kHz mono float32" data-output="Captured blocks"><rect x="260" y="370" width="180" height="84" rx="12"/><text x="278" y="404" class="title">MicrophoneManager</text><text x="278" y="426">microphone_manager.py</text></g>
+            <g class="node event" data-id="event2" data-title="Event Engine" data-desc="Maps evidence to five event types/counters." data-input="Vision/audio evidence" data-output="Structured events"><rect x="760" y="220" width="170" height="84" rx="12"/><text x="778" y="254" class="title">Event Engine</text><text x="778" y="276">ProctoringEventEngine</text></g>
+            <g class="node process" data-id="render" data-title="OpenCV Monitor" data-desc="Renders frame and dashboard cards, counters, history and session ID." data-input="Latest vision + audio state" data-output="Live window"><rect x="980" y="220" width="120" height="84" rx="12"/><text x="994" y="254" class="title">Monitor</text><text x="994" y="276">OpenCV</text></g>
+          </g>
+          <path class="edge" d="M210 260 H260"/><path class="edge accent" d="M440 245 C460 180 460 130 500 112"/><path class="edge accent" d="M440 260 H500"/><path class="edge accent" d="M440 275 C460 330 460 390 500 412"/>
+          <path class="edge" d="M440 410 H260"/><path class="edge" d="M700 112 H730 C730 180 730 220 760 245"/><path class="edge" d="M700 262 H760"/><path class="edge hot" d="M700 412 C730 400 730 300 760 280"/><path class="edge" d="M930 262 H980"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d3" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>3. Student Registration and Biometric Enrollment Flow</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <g class="nodes">
+            <g class="node ui" data-id="details" data-title="Student details" data-desc="Full name and enrollment number are validated." data-input="Name, enrollment, optional email" data-output="StudentRegistrationService inputs"><rect x="30" y="210" width="160" height="78" rx="12"/><text x="48" y="244" class="title">Student Details</text><text x="48" y="266">StudentRegistrationService</text></g>
+            <g class="node thread" data-id="camera2" data-title="Registration Camera" data-desc="Tkinter registration tab starts a CameraManager loop." data-input="Webcam frames" data-output="Three captured frames"><rect x="220" y="210" width="170" height="78" rx="12"/><text x="238" y="244" class="title">Face Capture</text><text x="238" y="266">Three valid samples</text></g>
+            <g class="node ai" data-id="face2" data-title="Face embeddings" data-desc="FaceIdentityAdapter validates normalized 128-D vectors and distinct captures." data-input="Three frames" data-output="Three 128-D embeddings"><rect x="420" y="210" width="180" height="78" rx="12"/><text x="438" y="244" class="title">Face Embeddings</text><text x="438" y="266">128-D / normalized</text></g>
+            <g class="node thread" data-id="voice-worker" data-title="Voice registration worker" data-desc="Loads cached Silero VAD and ECAPA in the separate audio environment." data-input="15-second mono in-memory audio" data-output="192-D ECAPA embedding"><rect x="630" y="210" width="190" height="78" rx="12"/><text x="648" y="244" class="title">Voice Enrollment</text><text x="648" y="266">VAD + ECAPA</text></g>
+            <g class="node security" data-id="dpapi" data-title="DPAPI sealing" data-desc="Windows DPAPI protector seals face and voice embedding blobs." data-input="Plaintext embedding vectors" data-output="Encrypted blob prefix"><rect x="850" y="210" width="180" height="78" rx="12"/><text x="868" y="244" class="title">Biometric Encryption</text><text x="868" y="266">Windows DPAPI</text></g>
+            <g class="node db" data-id="register-db" data-title="Atomic registration" data-desc="Candidate, student, face, voice and indexes are committed together." data-input="Student and biometrics" data-output="REGISTERED / COMPLETE"><rect x="850" y="360" width="180" height="78" rx="12"/><text x="868" y="394" class="title">CandidateStorage</text><text x="868" y="416">SQLite transaction</text></g>
+          </g>
+          <path class="edge" d="M190 249 H220"/><path class="edge accent" d="M390 249 H420"/><path class="edge accent" d="M600 249 H630"/><path class="edge hot" d="M820 249 H850"/><path class="edge" d="M940 288 V360"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d4" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>4. Student Login and Exam Initialization Flow</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <g class="nodes">
+            <g class="node ui" data-id="registered-table" data-title="Registered Students table" data-desc="Lists list_students() records and allows a single browse selection." data-input="Student search" data-output="Selected student_id"><rect x="30" y="210" width="190" height="82" rx="12"/><text x="48" y="244" class="title">Registered Students</text><text x="48" y="266">ExamEngineApp UI</text></g>
+            <g class="node process" data-id="eligibility" data-title="Eligibility check" data-desc="is_fully_registered requires REGISTERED, complete face and voice, exactly three faces and a voice embedding." data-input="student_id" data-output="Eligible or clear error"><rect x="260" y="210" width="190" height="82" rx="12"/><text x="278" y="244" class="title">Eligibility Check</text><text x="278" y="266">is_fully_registered()</text></g>
+            <g class="node db" data-id="student-load" data-title="Load exact student" data-desc="load_student reads candidate-linked face rows and the student voice row." data-input="student_id" data-output="Three face vectors + voice vector"><rect x="490" y="210" width="190" height="82" rx="12"/><text x="508" y="244" class="title">Student Biometrics</text><text x="508" y="266">load_student()</text></g>
+            <g class="node db" data-id="session-create" data-title="Fresh exam session" data-desc="create_exam_session creates a UUID session with ACTIVE status." data-input="student_id, UTC start" data-output="Unique session_id"><rect x="720" y="210" width="170" height="82" rx="12"/><text x="738" y="244" class="title">Exam Session</text><text x="738" y="266">create_exam_session()</text></g>
+            <g class="node thread" data-id="popen" data-title="Live monitor process" data-desc="ExamEngineApp uses subprocess.Popen to launch integration.live_demo with candidate/session and audio interpreter." data-input="candidate ID + session ID" data-output="OpenCV monitor process"><rect x="930" y="210" width="160" height="82" rx="12"/><text x="948" y="244" class="title">Popen Monitor</text><text x="948" y="266">integration.live_demo</text></g>
+            <g class="node no" data-id="login" data-title="Enrollment login — NOT IMPLEMENTED" data-desc="No enrollment-number authentication/login workflow is established in ExamEngineApp." data-input="N/A" data-output="N/A"><rect x="260" y="360" width="190" height="82" rx="12"/><text x="278" y="394" class="title">NOT IMPLEMENTED</text><text x="278" y="416">Enrollment login</text></g>
+          </g>
+          <style>.node.no rect{fill:#4a2028;stroke:#ff6b72}</style>
+          <path class="edge" d="M220 251 H260"/><path class="edge" d="M450 251 H490"/><path class="edge" d="M680 251 H720"/><path class="edge hot" d="M890 251 H930"/>
+          <path class="edge red" d="M355 292 V360"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d5" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>5. Live Face Detection and Identity Verification Flow</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <g class="nodes">
+            <g class="node thread" data-id="frame" data-title="Shared frame" data-desc="CameraManager.read supplies one frame copy to the vision executor." data-input="BGR camera frame" data-output="Same frame to phone and face"><rect x="30" y="220" width="160" height="78" rx="12"/><text x="48" y="254" class="title">BGR Webcam Frame</text><text x="48" y="276">640×480 configured</text></g>
+            <g class="node ai" data-id="landmark" data-title="MediaPipe FaceLandmarker" data-desc="IMAGE mode, maximum five faces, face_landmarker.task." data-input="RGB conversion" data-output="Face landmarks"><rect x="230" y="220" width="190" height="78" rx="12"/><text x="248" y="254" class="title">FaceLandmarker</text><text x="248" y="276">MediaPipe IMAGE</text></g>
+            <g class="node ai" data-id="sface" data-title="OpenCV SFace" data-desc="face_recognition_sface.onnx extracts normalized 128-D embeddings." data-input="Aligned face image" data-output="128-D live embeddings"><rect x="460" y="220" width="180" height="78" rx="12"/><text x="478" y="254" class="title">SFace Recognizer</text><text x="478" y="276">face_recognition_sface</text></g>
+            <g class="node security" data-id="refs" data-title="Candidate references" data-desc="Exact three candidate vectors are decrypted from the selected candidate ID." data-input="candidate_id" data-output="Reference embeddings"><rect x="460" y="370" width="180" height="78" rx="12"/><text x="478" y="404" class="title">Candidate References</text><text x="478" y="426">3 × 128-D</text></g>
+            <g class="node process" data-id="match" data-title="Identity comparison" data-desc="Dot product against each reference; maximum similarity." data-input="Live and reference vectors" data-output="MATCH/MISMATCH per face"><rect x="680" y="220" width="180" height="78" rx="12"/><text x="698" y="254" class="title">Identity Comparison</text><text x="698" y="276">Threshold 0.3822</text></g>
+            <g class="node event" data-id="face-events" data-title="Identity events" data-desc="NO_FACE_DETECTED is separate from IDENTITY_UNMATCHED." data-input="Per-face output" data-output="No-face/mismatch events"><rect x="900" y="220" width="190" height="78" rx="12"/><text x="918" y="254" class="title">Face Event Logic</text><text x="918" y="276">Two independent types</text></g>
+          </g>
+          <path class="edge" d="M190 259 H230"/><path class="edge" d="M420 259 H460"/><path class="edge hot" d="M640 259 H680"/><path class="edge" d="M550 370 V298"/><path class="edge" d="M860 259 H900"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d6" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>6. Phone Detection Pipeline</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <g class="nodes">
+            <g class="node thread" data-id="pframe" data-title="Shared webcam frame" data-desc="The live monitor passes the frame copy to PhoneDetectionAdapter.detect." data-input="BGR frame" data-output="Model source"><rect x="30" y="220" width="170" height="80" rx="12"/><text x="48" y="254" class="title">Shared Frame</text><text x="48" y="276">analyze_vision_frame</text></g>
+            <g class="node ai" data-id="weights" data-title="YOLO weights" data-desc="phone_detection/models/phone_v2_best.pt." data-input="Weights path" data-output="YOLO model"><rect x="240" y="220" width="170" height="80" rx="12"/><text x="258" y="254" class="title">phone_v2_best.pt</text><text x="258" y="276">Ultralytics YOLO</text></g>
+            <g class="node process" data-id="predict" data-title="YOLO predict" data-desc="predict(source=frame, conf=0.50, imgsz=416, verbose=False)." data-input="Frame" data-output="Results[0]"><rect x="450" y="220" width="170" height="80" rx="12"/><text x="468" y="254" class="title">YOLO Inference</text><text x="468" y="276">0.50 / 416</text></g>
+            <g class="node process" data-id="boxes" data-title="Detection boxes" data-desc="Each box returns xyxy, class ID/name and confidence." data-input="YOLO boxes" data-output="Detection list"><rect x="660" y="220" width="170" height="80" rx="12"/><text x="678" y="254" class="title">Bounding Boxes</text><text x="678" y="276">Structured detections</text></g>
+            <g class="node event" data-id="phone-event" data-title="PHONE_DETECTED" data-desc="Valid detections create independent session observations." data-input="Detected=true" data-output="Five-observation confirmation"><rect x="870" y="220" width="190" height="80" rx="12"/><text x="888" y="254" class="title">PHONE_DETECTED</text><text x="888" y="276">ProctoringEventEngine</text></g>
+            <g class="node ui" data-id="render-box" data-title="Frame annotations" data-desc="Live render draws phone boxes and status data on the OpenCV canvas." data-input="Detections" data-output="Visible overlay"><rect x="660" y="370" width="170" height="80" rx="12"/><text x="678" y="404" class="title">Monitor Overlay</text><text x="678" y="426">Phone bounding boxes</text></g>
+          </g>
+          <path class="edge" d="M200 260 H240"/><path class="edge" d="M410 260 H450"/><path class="edge accent" d="M620 260 H660"/><path class="edge hot" d="M830 260 H870"/><path class="edge" d="M745 300 V370"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d7" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>7. Audio Monitoring and Speaker Verification Pipeline</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 560" data-zoom-group>
+          <g class="nodes">
+            <g class="node external" data-id="mic" data-title="Physical microphone" data-desc="Real microphone device discovered by sounddevice." data-input="Physical PCM" data-output="Device input"><rect x="30" y="220" width="150" height="80" rx="12"/><text x="48" y="254" class="title">Microphone</text><text x="48" y="276">sounddevice</text></g>
+            <g class="node thread" data-id="stream" data-title="MicrophoneManager" data-desc="Single 16 kHz mono float32 stream, native-rate fallback/resampling, callback queue." data-input="Device audio" data-output="Valid copied blocks"><rect x="220" y="220" width="180" height="80" rx="12"/><text x="238" y="254" class="title">MicrophoneManager</text><text x="238" y="276">16 kHz mono</text></g>
+            <g class="node thread" data-id="worker-audio" data-title="AudioWorker" data-desc="Subprocess runs audio_worker.run_worker and reads stdin STOP control." data-input="JSON speaker reference" data-output="JSON window result"><rect x="440" y="220" width="180" height="80" rx="12"/><text x="458" y="254" class="title">Isolated Audio Worker</text><text x="458" y="276">Audio subprocess</text></g>
+            <g class="node ai" data-id="silero" data-title="Silero VAD" data-desc="extract_evaluable_speech returns VAD speech pieces and durations." data-input="48 k samples / 3-second window" data-output="Speech duration"><rect x="660" y="70" width="180" height="80" rx="12"/><text x="678" y="104" class="title">Silero VAD</text><text x="678" y="126">Speech timestamps</text></g>
+            <g class="node ai" data-id="ecapa" data-title="ECAPA-SpeechBrain" data-desc="ECAPA 192-D embedding comparison against the selected candidate voice vector." data-input="Pure speech" data-output="Similarity / mismatch"><rect x="660" y="220" width="180" height="80" rx="12"/><text x="678" y="254" class="title">ECAPA TDNN</text><text x="678" y="276">192-D speaker</text></g>
+            <g class="node ai" data-id="yamnet" data-title="YAMNet" data-desc="Optional/cached TensorFlow Hub sound classifier for suspicious or phone-like audio." data-input="Audio window" data-output="Phone/suspicious score"><rect x="660" y="370" width="180" height="80" rx="12"/><text x="678" y="404" class="title">YAMNet</text><text x="678" y="426">Cached / isolated env</text></g>
+            <g class="node event" data-id="audio-events" data-title="Audio events" data-desc="UNKNOWN_HUMAN_VOICE and SUSPICIOUS_AUDIO_SOUND are separate event types." data-input="Speaker/sound results" data-output="Two independent counters"><rect x="900" y="220" width="190" height="80" rx="12"/><text x="918" y="254" class="title">Audio Event Logic</text><text x="918" y="276">No guilt from one hit</text></g>
+          </g>
+          <path class="edge" d="M180 260 H220"/><path class="edge" d="M400 260 H440"/><path class="edge accent" d="M620 245 C640 180 640 130 660 112"/><path class="edge accent" d="M620 260 H660"/><path class="edge hot" d="M620 275 C640 330 640 390 660 410"/><path class="edge" d="M840 112 C870 150 870 220 900 245"/><path class="edge" d="M840 260 H900"/><path class="edge hot" d="M840 410 C870 380 870 300 900 280"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d8" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>8. Proctoring Event Generation and Monitoring Flow</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 520" data-zoom-group>
+          <g class="nodes">
+            <g class="node ai" data-id="ephone" data-title="Phone evidence" data-desc="PhoneDetectionAdapter detects one or more boxes." data-input="Frame" data-output="PHONE_DETECTED"><rect x="30" y="80" width="180" height="78" rx="12"/><text x="48" y="114" class="title">Phone Module</text><text x="48" y="136">PHONE_DETECTED</text></g>
+            <g class="node ai" data-id="eface" data-title="Face evidence" data-desc="Identity and no-face outputs are generated separately." data-input="Frame + refs" data-output="Identity/no-face types"><rect x="30" y="220" width="180" height="78" rx="12"/><text x="48" y="254" class="title">Face Module</text><text x="48" y="276">Mismatch / No-face</text></g>
+            <g class="node ai" data-id="eaudio" data-title="Audio evidence" data-desc="Speaker and suspicious sound outputs." data-input="Audio window" data-output="Unknown voice/sound types"><rect x="30" y="360" width="180" height="78" rx="12"/><text x="48" y="394" class="title">Audio Module</text><text x="48" y="416">Voice / Sound types</text></g>
+            <g class="node event" data-id="observe" data-title="observe()" data-desc="Deduplicates by observation ID per event type and limits counters to five." data-input="Event type, ID, model output" data-output="OBSERVED or CONFIRMED"><rect x="280" y="220" width="190" height="78" rx="12"/><text x="298" y="254" class="title">ProctoringEventEngine</text><text x="298" y="276">observe()</text></g>
+            <g class="node db" data-id="persist" data-title="Persistence callback" data-desc="live_demo persists events to the SQLite proctoring_events table." data-input="Session/student/event" data-output="Database record"><rect x="520" y="220" width="180" height="78" rx="12"/><text x="538" y="254" class="title">record_proctoring_event</text><text x="538" y="276">CandidateStorage</text></g>
+            <g class="node process" data-id="ui-events" data-title="Monitor event UI" data-desc="renders independent 0/5–5/5 counters and timestamped current/history lists." data-input="Event engine" data-output="Visible event dashboard"><rect x="750" y="220" width="190" height="78" rx="12"/><text x="768" y="254" class="title">Monitor Event Cards</text><text x="768" y="276">Counters + history</text></g>
+            <g class="node security" data-id="jsonl" data-title="JSONL history" data-desc="Optional current-session event history file load/append behavior." data-input="Event" data-output="proctoring_event_history.jsonl"><rect x="520" y="360" width="180" height="78" rx="12"/><text x="538" y="394" class="title">JSONL History</text><text x="538" y="416">Existing file / append</text></g>
+          </g>
+          <path class="edge" d="M210 119 C240 150 250 220 280 245"/><path class="edge" d="M210 259 H280"/><path class="edge" d="M210 399 C240 370 250 300 280 280"/><path class="edge" d="M470 259 H520"/><path class="edge" d="M700 259 H750"/><path class="edge hot" d="M610 298 V360"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d9" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>9. Database and Biometric Data Storage Architecture</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 560" data-zoom-group>
+          <g class="nodes">
+            <g class="node db" data-id="candidates" data-title="candidates" data-desc="candidate_id, candidate_name, status, created_at, updated_at." data-input="Registration" data-output="Candidate key"><rect x="40" y="80" width="190" height="80" rx="12"/><text x="58" y="114" class="title">candidates</text><text x="58" y="136">Candidate identity record</text></g>
+            <g class="node db" data-id="students" data-title="students" data-desc="Student details and registration completion flags." data-input="Candidate ID" data-output="Enrollment and status"><rect x="300" y="80" width="190" height="80" rx="12"/><text x="318" y="114" class="title">students</text><text x="318" y="136">Registration status</text></g>
+            <g class="node db" data-id="face-table" data-title="candidate_embeddings" data-desc="Three indexed 128-D face blobs with landmarks flag." data-input="candidate_id" data-output="Face embedding rows"><rect x="40" y="240" width="190" height="80" rx="12"/><text x="58" y="274" class="title">candidate_embeddings</text><text x="58" y="296">Three 128-D face blobs</text></g>
+            <g class="node db" data-id="voice-table" data-title="student_voice_embeddings" data-desc="One candidate-linked 192-D voice blob." data-input="student_id" data-output="Voice embedding row"><rect x="300" y="240" width="190" height="80" rx="12"/><text x="318" y="274" class="title">student_voice_embeddings</text><text x="318" y="296">One 192-D voice blob</text></g>
+            <g class="node security" data-id="crypto" data-title="Windows DPAPI" data-desc="_seal_embedding / open_biometric_payload protect and decrypt face and voice blobs." data-input="Embedding vector" data-output="Encrypted biometric BLOB"><rect x="560" y="160" width="190" height="80" rx="12"/><text x="578" y="194" class="title">DPAPI Protector</text><text x="578" y="216">biometric_crypto.py</text></g>
+            <g class="node db" data-id="sessions" data-title="exam_sessions" data-desc="Unique UUID session linked to a single student." data-input="student_id, started_at" data-output="Session status"><rect x="820" y="80" width="190" height="80" rx="12"/><text x="838" y="114" class="title">exam_sessions</text><text x="838" y="136">Fresh UUID session</text></g>
+            <g class="node db" data-id="events-table" data-title="proctoring_events" data-desc="Session/student-scoped timestamped event records." data-input="Confirmed/observed event" data-output="Persisted event rows"><rect x="820" y="240" width="190" height="80" rx="12"/><text x="838" y="274" class="title">proctoring_events</text><text x="838" y="296">Session event history</text></g>
+            <g class="node process" data-id="sqlite" data-title="SQLite database" data-desc="integration/candidate_embeddings.sqlite3 is the local MVP store." data-input="Read/write transactions" data-output="Persistent records"><rect x="560" y="360" width="190" height="80" rx="12"/><text x="578" y="394" class="title">Candidate SQLite DB</text><text x="578" y="416">candidate_embeddings.sqlite3</text></g>
+          </g>
+          <path class="edge" d="M230 120 H300"/><path class="edge" d="M395 160 V240"/><path class="edge" d="M230 280 H300"/><path class="edge hot" d="M490 280 C520 260 530 220 560 200"/><path class="edge hot" d="M230 280 C280 240 500 200 560 200"/><path class="edge" d="M490 120 C620 120 720 120 820 120"/><path class="edge" d="M750 200 C800 200 800 240 820 260"/><path class="edge" d="M915 160 V240"/><path class="edge" d="M655 240 V360"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="d10" class="diagram-section" data-diagram>
+        <div class="diagram-head"><h2>10. Runtime Threading and Resource Management Architecture</h2><div class="toolbar" data-toolbar></div></div>
+        <div class="viewport"><svg viewBox="0 0 1120 560" data-zoom-group>
+          <g class="nodes">
+            <g class="node ui" data-id="main-thread" data-title="Tk/OpenCV main process" data-desc="Tkinter UI main loop or live_demo main loop owns window lifecycle." data-input="UI events / cv2 keys" data-output="Scheduled UI updates"><rect x="40" y="220" width="190" height="82" rx="12"/><text x="58" y="254" class="title">Main Thread</text><text x="58" y="276">Tkinter / OpenCV loop</text></g>
+            <g class="node thread" data-id="registration-thread" data-title="Registration camera thread" data-desc="ExamEngineApp._camera_loop updates a locked latest-frame buffer." data-input="CameraManager frame" data-output="Camera preview"><rect x="280" y="70" width="190" height="82" rx="12"/><text x="298" y="104" class="title">Registration Camera</text><text x="298" y="126">daemon thread</text></g>
+            <g class="node thread" data-id="voice-reader" data-title="Voice reader thread" data-desc="_voice_reader sends JSON queue entries back to the Tk main thread." data-input="VOICE_REG_JSON lines" data-output="Queue messages"><rect x="280" y="220" width="190" height="82" rx="12"/><text x="298" y="254" class="title">Voice Reader</text><text x="298" y="276">Queue to root.after()</text></g>
+            <g class="node process" data-id="voice-process" data-title="Voice registration subprocess" data-desc="Separate Python 3.11 process performs capture and ECAPA enrollment." data-input="STOP on stdin" data-output="VOICE_REG_JSON"><rect x="280" y="370" width="190" height="82" rx="12"/><text x="298" y="404" class="title">voice_registration_worker</text><text x="298" y="426">Subprocess + stdin</text></g>
+            <g class="node thread" data-id="vision-thread" data-title="Vision worker" data-desc="One-worker ThreadPoolExecutor submits same-frame phone and face analysis." data-input="Frame copy" data-output="Future result"><rect x="530" y="220" width="190" height="82" rx="12"/><text x="548" y="254" class="title">live-vision thread</text><text x="548" y="276">Future / shutdown</text></g>
+            <g class="node thread" data-id="audio-thread" data-title="Audio worker client" data-desc="AudioWorkerClient reader thread consumes JSON and stores state." data-input="JSON lines" data-output="AudioWorkerState"><rect x="530" y="370" width="190" height="82" rx="12"/><text x="548" y="404" class="title">audio-worker-output</text><text x="548" y="426">Queue-safe state</text></g>
+            <g class="node process" data-id="audio-proc" data-title="Live audio subprocess" data-desc="Separate Python environment runs AudioMonitor and AudioAdapter." data-input="STOP / speaker reference" data-output="JSON window results"><rect x="770" y="370" width="190" height="82" rx="12"/><text x="788" y="404" class="title">integration.audio_worker</text><text x="788" y="426">Subprocess</text></g>
+            <g class="node event" data-id="shutdown" data-title="Shutdown" data-desc="Worker.stop, executor.shutdown, CameraManager context release, model close, session end." data-input="Q/ESC/window close" data-output="Devices released/status ended"><rect x="770" y="220" width="190" height="82" rx="12"/><text x="788" y="254" class="title">Clean Shutdown</text><text x="788" y="276">Resources + session</text></g>
+          </g>
+          <path class="edge" d="M230 245 C250 190 250 130 280 112"/><path class="edge" d="M230 260 H280"/><path class="edge" d="M230 275 C250 330 250 400 280 410"/><path class="edge" d="M470 260 H530"/><path class="edge" d="M470 410 H530"/><path class="edge" d="M720 410 H770"/><path class="edge hot" d="M720 260 C740 260 740 260 770 260"/><path class="edge red" d="M865 370 V302"/>
+        </svg><div class="details"></div></div>
+      </section>
+
+      <section id="modules" class="grid2">
+        <div class="card">
+          <h2>Technology Stack Found in Source</h2>
+          <table><tr><th>Area</th><th>Actual implementation</th></tr>
+            <tr><td>UI</td><td>Tkinter + ttk</td></tr><tr><td>Vision</td><td>OpenCV, MediaPipe Tasks FaceLandmarker, OpenCV SFace ONNX</td></tr>
+            <tr><td>Phone</td><td>Ultralytics YOLO11n checkpoint <code>phone_v2_best.pt</code></td></tr>
+            <tr><td>Audio</td><td>sounddevice, NumPy, Silero VAD, SpeechBrain ECAPA, TensorFlow Hub YAMNet</td></tr>
+            <tr><td>Storage</td><td>SQLite, Windows DPAPI</td></tr><tr><td>Concurrency</td><td>Threads, Queue, subprocess.Popen, ThreadPoolExecutor</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h2>Verified Data Formats</h2>
+          <table><tr><th>Model/data</th><th>Format</th></tr>
+            <tr><td>Webcam</td><td>BGR NumPy frame, default 640×480</td></tr>
+            <tr><td>Phone</td><td>detections with xyxy, class_id/name, confidence</td></tr>
+            <tr><td>Face</td><td>128-D L2-normalized vectors; maximum five faces</td></tr>
+            <tr><td>Voice</td><td>192-D normalized ECAPA vector in the live monitor</td></tr>
+            <tr><td>Audio capture</td><td>16 kHz mono float32; 8,000-sample blocks</td></tr>
+            <tr><td>Events</td><td>Timestamped JSON-like dictionaries and SQLite rows</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <section id="gaps" class="grid2">
+        <div class="card">
+          <h2>Implementation Status and Gaps</h2>
+          <table><tr><th>Area</th><th>Status</th></tr>
+            <tr><td>Student registration</td><td><span class="status">DIRECTLY IMPLEMENTED</span></td></tr>
+            <tr><td>Registered Students list and Start Exam subprocess</td><td><span class="status">DIRECTLY IMPLEMENTED</span></td></tr>
+            <tr><td>Exact candidate biometric loading</td><td><span class="status">DIRECTLY IMPLEMENTED</span></td></tr>
+            <tr><td>Fresh UUID exam session and event persistence</td><td><span class="status">DIRECTLY IMPLEMENTED</span></td></tr>
+            <tr><td>Live phone/face/audio monitor</td><td><span class="status">DIRECTLY IMPLEMENTED</span></td></tr>
+            <tr><td>Enrollment-number login</td><td><span class="status no">NOT IMPLEMENTED</span></td></tr>
+            <tr><td>End-to-end UI launch with real webcam/mic</td><td><span class="status gap">NOT VERIFIED IN THIS REPORT</span></td></tr>
+            <tr><td>All model loading successful on a target machine</td><td><span class="status gap">DEPENDENCY/HARDWARE DEPENDENT</span></td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h2>Security and Candidate Isolation</h2>
+          <ul>
+            <li><code>load_candidate_read_only()</code> reads rows only for the supplied <code>candidate_id</code>.</li>
+            <li>Student flags require three face rows and one voice row for live start.</li>
+            <li>The live process receives the selected candidate's three face references and linked voice embedding.</li>
+            <li>No <code>enroll.wav</code> is the default database voice reference. An explicit WAV reference is optional and requires a matching candidate ID.</li>
+            <li>Voice/face blobs are protected with Windows DPAPI in the current storage implementation.</li>
+            <li>Captured frames and raw microphone recordings are not written to disk by the live monitor paths.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="sources" class="card">
+        <h2>Source Code Reference Index</h2>
+        <p>Project-relative references are clickable in the source index. Exact line anchors are based on the current working tree and are intended to open the corresponding file in an editor/browser that supports source fragments.</p>
+        <div class="source-index">
+          <a href="../integration/exam_app.py#L29">integration/exam_app.py · ExamEngineApp / entry</a>
+          <a href="../integration/exam_app.py#L162">integration/exam_app.py · Registered Students UI</a>
+          <a href="../integration/exam_app.py#L912">integration/exam_app.py · start_exam()</a>
+          <a href="../integration/student_registration.py#L9">integration/student_registration.py · StudentRegistrationService</a>
+          <a href="../integration/candidate_storage.py#L68">integration/candidate_storage.py · SQLite schema</a>
+          <a href="../integration/candidate_storage.py#L650">integration/candidate_storage.py · register_student()</a>
+          <a href="../integration/candidate_storage.py#L714">integration/candidate_storage.py · load_student/list_students</a>
+          <a href="../integration/candidate_storage.py#L778">integration/candidate_storage.py · create_exam_session()</a>
+          <a href="../integration/candidate_storage.py#L837">integration/candidate_storage.py · record_proctoring_event()</a>
+          <a href="../integration/biometric_crypto.py#L1">integration/biometric_crypto.py · DPAPI implementation</a>
+          <a href="../integration/camera_manager.py#L11">integration/camera_manager.py · CameraManager</a>
+          <a href="../integration/module_adapters/phone.py#L23">integration/module_adapters/phone.py · PhoneDetectionAdapter</a>
+          <a href="../integration/module_adapters/face_identity.py#L15">integration/module_adapters/face_identity.py · FaceIdentityAdapter</a>
+          <a href="../integration/module_adapters/face_identity.py#L262">integration/module_adapters/face_identity.py · verify_registered_identity()</a>
+          <a href="../integration/live_demo.py#L96">integration/live_demo.py · load_candidate_read_only()</a>
+          <a href="../integration/live_demo.py#L369">integration/live_demo.py · analyze_vision_frame()</a>
+          <a href="../integration/live_demo.py#L2111">integration/live_demo.py · LiveProctoringDemo</a>
+          <a href="../integration/live_demo.py#L2148">integration/live_demo.py · run()</a>
+          <a href="../integration/live_demo.py#L2310">integration/live_demo.py · main()</a>
+          <a href="../integration/proctoring_events.py#L20">integration/proctoring_events.py · ProctoringEventEngine</a>
+          <a href="../integration/proctoring_events.py#L88">integration/proctoring_events.py · observe()</a>
+          <a href="../integration/microphone_manager.py#L38">integration/microphone_manager.py · MicrophoneManager</a>
+          <a href="../integration/audio_monitor.py#L25">integration/audio_monitor.py · AudioMonitor</a>
+          <a href="../integration/module_adapters/audio.py#L18">integration/module_adapters/audio.py · AudioAdapter</a>
+          <a href="../integration/audio_worker.py#L191">integration/audio_worker.py · run_worker()</a>
+          <a href="../integration/voice_registration_worker.py#L87">integration/voice_registration_worker.py · capture_voice_embedding()</a>
+          <a href="../integration/voice_registration_models.py#L1">integration/voice_registration_models.py · cached VAD/ECAPA enrollment</a>
+          <a href="../integration/config.py#L1">integration/config.py · model paths and thresholds</a>
+          <a href="../integration/README.md#L1">integration/README.md · integration documentation</a>
+          <a href="../voice_vyor_Ai/detector.py#L1">voice_vyor_Ai/detector.py · Silero/ECAPA/YAMNet implementation</a>
+          <a href="../voice_vyor_Ai/ecapa_model_loader.py#L1">voice_vyor_Ai/ecapa_model_loader.py · pinned ECAPA loader</a>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll('[data-diagram]').forEach((section)=>{
+      const toolbar=section.querySelector('[data-toolbar]');
+      toolbar.innerHTML='<input type="search" placeholder="Search module or class" aria-label="Search module"><button data-action="zoom-in">Zoom +</button><button data-action="zoom-out">Zoom −</button><button data-action="fit">Fit</button><button data-action="reset">Reset</button>';
+      const viewport=section.querySelector('.viewport');
+      const svg=section.querySelector('svg');
+      const details=section.querySelector('.details');
+      let scale=1,panX=0,panY=0,drag=false,lastX=0,lastY=0;
+      const apply=()=>{const g=svg.querySelector('[data-zoom-group]');g.setAttribute('transform',`translate(${panX} ${panY}) scale(${scale})`)};
+      toolbar.querySelector('[data-action="zoom-in"]').onclick=()=>{scale=Math.min(3,scale*1.2);apply()};
+      toolbar.querySelector('[data-action="zoom-out"]').onclick=()=>{scale=Math.max(.5,scale/1.2);apply()};
+      toolbar.querySelector('[data-action="reset"]').onclick=()=>{scale=1;panX=0;panY=0;apply()};
+      toolbar.querySelector('[data-action="fit"]').onclick=()=>{scale=.9;panX=45;panY=20;apply()};
+      viewport.addEventListener('pointerdown',(event)=>{drag=true;lastX=event.clientX;lastY=event.clientY;viewport.setPointerCapture(event.pointerId)});
+      viewport.addEventListener('pointermove',(event)=>{if(!drag)return;panX+=(event.clientX-lastX)/scale;panY+=(event.clientY-lastY)/scale;lastX=event.clientX;lastY=event.clientY;apply()});
+      viewport.addEventListener('pointerup',()=>drag=false);
+      const nodes=section.querySelectorAll('.node');
+      nodes.forEach((node)=>{
+        node.addEventListener('click',(event)=>{
+          event.stopPropagation();
+          nodes.forEach(n=>n.classList.remove('match'));
+          node.classList.add('match');
+          details.innerHTML=`<h3>${node.dataset.title||'Component'}</h3><p>${node.dataset.desc||''}</p><p><b>Input:</b> ${node.dataset.input||'—'}</p><p><b>Output:</b> ${node.dataset.output||'—'}</p>`;
+          details.classList.add('show');
+        });
+      });
+      viewport.addEventListener('click',(event)=>{if(event.target===viewport||event.target===svg){details.classList.remove('show');nodes.forEach(n=>n.classList.remove('match'))}});
+      toolbar.querySelector('input').addEventListener('input',(event)=>{
+        const q=event.target.value.trim().toLowerCase();
+        nodes.forEach((node)=>{
+          const hay=(node.dataset.title+' '+node.dataset.desc+' '+node.textContent).toLowerCase();
+          node.classList.toggle('dim',Boolean(q)&&!hay.includes(q));
+          node.classList.toggle('match',Boolean(q)&&hay.includes(q));
+        });
+      });
+    });
+  </script>
+</body>
+</html>

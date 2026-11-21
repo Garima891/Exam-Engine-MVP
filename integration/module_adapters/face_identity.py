@@ -270,10 +270,18 @@ class FaceIdentityAdapter:
         candidate_id = registered_candidate.get("candidate_id")
         if not isinstance(candidate_id, str) or not candidate_id.strip():
             raise ValueError("Registered candidate ID is required.")
-        try:
-            reference_embedding = self.validate_embedding(
+        references = registered_candidate.get("reference_embeddings")
+        if references is None:
+            references = [
                 registered_candidate.get("embedding")
-            )
+            ]
+        if not isinstance(references, (list, tuple)) or not references:
+            raise ValueError("Registered candidate references are required.")
+        try:
+            reference_embeddings = [
+                self.validate_embedding(reference)
+                for reference in references
+            ]
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"Invalid registered candidate embedding: {exc}"
@@ -300,11 +308,16 @@ class FaceIdentityAdapter:
                 )
                 continue
 
-            similarity = float(np.dot(reference_embedding, live_embedding))
+            similarities = [
+                float(np.dot(reference_embedding, live_embedding))
+                for reference_embedding in reference_embeddings
+            ]
+            similarity = max(similarities)
             verification_results.append(
                 {
                     "face_number": face["face_number"],
                     "similarity": similarity,
+                    "reference_scores": similarities,
                     "predicted": (
                         "MATCH" if similarity >= threshold else "MISMATCH"
                     ),
