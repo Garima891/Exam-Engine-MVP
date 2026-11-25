@@ -1,4 +1,7 @@
-# Local MVP biometric database. Embeddings are not encrypted.
+# Local MVP biometric database. Face and voice embeddings are protected with
+# Windows DPAPI for the current Windows user; protected records require that
+# user context and may become unrecoverable if the database is moved to another
+# Windows account or machine. The SQLite database itself is not fully encrypted.
 integration/candidate_embeddings.sqlite3
 integration/candidate_embeddings.sqlite3-shm
 integration/candidate_embeddings.sqlite3-wal

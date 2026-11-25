@@ -255,6 +255,10 @@ class MicrophoneManager:
             self._closing = True
             stream, self._stream = self._stream, None
             self._last_input_rms = 0.0
+            self._last_input_min = None
+            self._last_input_max = None
+            self._callback_count = 0
+            self._last_callback_monotonic = None
             self._pending_block = None
 
         self._wake_reader()
@@ -555,6 +559,11 @@ class MicrophoneManager:
             if self._closing or self._stream_error is not None:
                 return
             self._stream_error = error
+            self._last_input_rms = 0.0
+            self._last_input_min = None
+            self._last_input_max = None
+            self._callback_count = 0
+            self._last_callback_monotonic = None
         self._callback_received.set()
         self._wake_reader()
 

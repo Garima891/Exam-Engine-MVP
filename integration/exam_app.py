@@ -10,6 +10,7 @@ import time
 import traceback
 import tkinter as tk
 from datetime import datetime, timezone
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
@@ -19,12 +20,158 @@ from PIL import Image, ImageTk
 
 from integration.candidate_storage import CandidateStorage
 from integration.config import (
+    AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS,
     CANDIDATE_DATABASE_PATH,
     MICROPHONE_STARTUP_TIMEOUT_SECONDS,
 )
 from integration.camera_manager import CameraManager
 from integration.module_adapters.face_identity import FaceIdentityAdapter
 from integration.student_registration import StudentRegistrationService
+
+
+def _probe_audio_interpreter(python_executable: str) -> tuple[bool, str]:
+    if not python_executable or not os.path.isfile(python_executable):
+        return False, f"Interpreter not found: {python_executable or '(empty path)'}"
+    if not os.access(python_executable, os.X_OK):
+        return False, f"Interpreter is not executable: {python_executable}"
+    mandatory_modules = (
+        "numpy",
+        "sounddevice",
+        "torch",
+        "torchaudio",
+        "soundfile",
+        "tensorflow",
+        "tensorflow_hub",
+        "silero_vad",
+        "speechbrain",
+        "huggingface_hub",
+    )
+    probe_script = (
+        "import importlib, sys\n"
+        "missing=[]\n"
+        f"for name in {mandatory_modules!r}:"
+        "\n"
+        "    try:\n"
+        "        importlib.import_module(name)\n"
+        "    except Exception as exc:\n"
+        "        missing.append(f'{name}: {type(exc).__name__}: {exc}')\n"
+        "if missing:\n"
+        "    print('MISSING MANDATORY AUDIO DEPENDENCIES: ' + '; '.join(missing))\n"
+        "    sys.exit(1)\n"
+    )
+    command = [python_executable, "-c", probe_script]
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(CANDIDATE_DATABASE_PATH.parents[1]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    try:
+        stdout, stderr = process.communicate(
+            timeout=AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        try:
+            if process.poll() is None:
+                process.kill()
+        except OSError as exc:
+            if process.poll() is None:
+                return False, (
+                    "Interpreter probe timed out, but its process could not be "
+                    f"terminated: {python_executable}: {type(exc).__name__}: {exc}"
+                )
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return False, (
+                    "Interpreter probe timed out and its process could not be "
+                    f"terminated: {python_executable}: {type(exc).__name__}: {exc}"
+                )
+            stdout, stderr = process.communicate()
+        diagnostics = _audio_probe_output(stdout, stderr)
+        timeout_error = (
+            "Interpreter probe timed out after "
+            f"{AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS:g} seconds: "
+            f"{python_executable}. The probe process was terminated "
+            f"(exit code {process.returncode})."
+        )
+        if diagnostics:
+            timeout_error += f" Probe output: {diagnostics}"
+        return False, timeout_error
+    if process.returncode != 0:
+        diagnostic = _audio_probe_output(stdout, stderr)
+        return False, (
+            f"Interpreter probe failed for {python_executable} "
+            f"with exit code {process.returncode}"
+            + (f": {diagnostic}" if diagnostic else "")
+        )
+    return True, ""
+
+
+def _audio_probe_output(stdout: str | None, stderr: str | None) -> str:
+    output = "\n".join(
+        stream.strip()
+        for stream in (stdout, stderr)
+        if stream and stream.strip()
+    )
+    if len(output) > 2000:
+        return output[:1997] + "..."
+    return output
+
+
+def _resolve_audio_python(configured: str | None = None) -> tuple[str | None, str]:
+    candidates: list[str] = []
+    configured = (
+        configured
+        if configured is not None
+        else os.environ.get("EXAM_AUDIO_PYTHON")
+    )
+    if configured:
+        candidates.append(os.path.expandvars(os.path.expanduser(configured.strip())))
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(
+            str(
+                Path(local_app_data)
+                / "venvs"
+                / "exam-engine-audio311"
+                / "Scripts"
+                / "python.exe"
+            )
+        )
+
+    candidates.append(sys.executable)
+
+    candidate_errors: list[str] = []
+    last_error = "no audio Python interpreter candidate was available"
+    seen_candidates: set[str] = set()
+    for candidate in candidates:
+        candidate = os.path.abspath(candidate)
+        candidate_key = os.path.normcase(candidate)
+        if candidate_key in seen_candidates:
+            continue
+        seen_candidates.add(candidate_key)
+        valid, error = _probe_audio_interpreter(candidate)
+        if valid:
+            return candidate, ""
+        candidate_errors.append(f"{candidate}: {error}")
+    if candidate_errors:
+        last_error = "No compatible audio interpreter found; attempted:\n" + "\n".join(
+            candidate_errors
+        )
+    return None, last_error
 
 
 class ExamEngineApp:
@@ -344,14 +491,13 @@ class ExamEngineApp:
             else:
                 self.record_status.set("Audio worker is finishing; please wait.")
             return
-        audio_python = os.environ.get("EXAM_AUDIO_PYTHON")
+        audio_python, interpreter_error = _resolve_audio_python()
         if not audio_python:
-            known = r"C:\Users\dell\AppData\Local\venvs\exam-engine-audio311\Scripts\python.exe"
-            if os.path.isfile(known):
-                audio_python = known
-        if not audio_python or not os.path.isfile(audio_python):
             self.microphone_status.set("MICROPHONE ERROR")
-            self.record_status.set("AUDIO311 interpreter not configured")
+            self.record_status.set(
+                "AUDIO311 interpreter unavailable: "
+                f"{interpreter_error}"
+            )
             return
         command = [
             audio_python,
@@ -926,6 +1072,17 @@ class ExamEngineApp:
         if student is None:
             messagebox.showerror("Start Exam", "Student record could not be loaded.")
             return
+        audio_python, interpreter_error = _resolve_audio_python()
+        if not audio_python:
+            messagebox.showerror(
+                "Start Exam",
+                "Audio interpreter validation failed. "
+                f"{interpreter_error}\n\n"
+                "Install the mandatory audio dependencies in the isolated "
+                "audio environment or set EXAM_AUDIO_PYTHON to its Python "
+                "executable.",
+            )
+            return
         timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         session = self.storage.create_exam_session(student_id, timestamp)
         command = [
@@ -937,13 +1094,7 @@ class ExamEngineApp:
             "--session-id",
             session["session_id"],
         ]
-        audio_python = os.environ.get("EXAM_AUDIO_PYTHON")
-        if not audio_python:
-            known_audio = r"C:\Users\dell\AppData\Local\venvs\exam-engine-audio311\Scripts\python.exe"
-            if os.path.isfile(known_audio):
-                audio_python = known_audio
-        if audio_python:
-            command.extend(["--audio-python", audio_python])
+        command.extend(["--audio-python", audio_python])
         try:
             subprocess.Popen(command, cwd=str(CANDIDATE_DATABASE_PATH.parents[1]))
         except Exception as exc:

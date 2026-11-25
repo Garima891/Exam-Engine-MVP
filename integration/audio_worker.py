@@ -25,6 +25,7 @@ from integration.module_adapters.audio import AudioAdapter
 MESSAGE_PREFIX = "PROCTOR_JSON:"
 MICROPHONE_QUEUE_CAPACITY = 4
 RECOVERY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+MICROPHONE_CALLBACK_STALL_TIMEOUT_SECONDS = 2.0
 _output_lock = threading.Lock()
 
 
@@ -133,6 +134,19 @@ def _capture_audio(
                         try:
                             result = monitor.analyze_next(timeout=0.25)
                         except InsufficientAudioError:
+                            callback_age = (
+                                microphone.seconds_since_last_callback
+                            )
+                            if (
+                                microphone.callback_count > 0
+                                and callback_age is not None
+                                and callback_age
+                                > MICROPHONE_CALLBACK_STALL_TIMEOUT_SECONDS
+                            ):
+                                raise MicrophoneError(
+                                    "Microphone callbacks stopped for "
+                                    f"{callback_age:.1f} seconds."
+                                )
                             continue
                         window_id += 1
                         recovery_attempts = 0

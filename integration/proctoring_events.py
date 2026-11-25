@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import math
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 from threading import Lock, RLock
+import time
 from typing import Any
 from uuid import uuid4
+
+from integration.config import (
+    EVENT_CONFIRMATION_WINDOW_SECONDS,
+    EVENT_MINIMUM_OBSERVATION_INTERVAL_SECONDS,
+)
 
 
 EVENT_MODULES = {
@@ -27,6 +34,8 @@ class ProctoringEventEngine:
         session_id: str | None = None,
         history_path: str | Path | None = None,
         event_persistence_callback: Any | None = None,
+        confirmation_window_seconds: float = EVENT_CONFIRMATION_WINDOW_SECONDS,
+        minimum_observation_intervals: dict[str, float] | None = None,
     ) -> None:
         if (
             isinstance(confirmation_observations, bool)
@@ -34,15 +43,54 @@ class ProctoringEventEngine:
             or confirmation_observations <= 0
         ):
             raise ValueError("Confirmation observations must be a positive integer.")
+        if (
+            isinstance(confirmation_window_seconds, bool)
+            or not isinstance(confirmation_window_seconds, (int, float))
+            or confirmation_window_seconds <= 0
+        ):
+            raise ValueError(
+                "Confirmation window must be a positive number of seconds."
+            )
+        observation_intervals = (
+            EVENT_MINIMUM_OBSERVATION_INTERVAL_SECONDS
+            if minimum_observation_intervals is None
+            else minimum_observation_intervals
+        )
+        if not isinstance(observation_intervals, dict):
+            raise ValueError("Minimum observation intervals must be a dictionary.")
+        for event_type, interval in observation_intervals.items():
+            if (
+                event_type not in EVENT_MODULES
+                or isinstance(interval, bool)
+                or not isinstance(interval, (int, float))
+                or not math.isfinite(float(interval))
+                or interval < 0
+            ):
+                raise ValueError(
+                    "Minimum observation intervals must map supported event "
+                    "types to finite, non-negative seconds."
+                )
 
         self.confirmation_observations = confirmation_observations
+        self.confirmation_window_seconds = float(confirmation_window_seconds)
+        self.minimum_observation_intervals = {
+            event_type: float(interval)
+            for event_type, interval in observation_intervals.items()
+        }
         self.session_id = session_id or str(uuid4())
         self.history_path = None if history_path is None else Path(history_path)
         self.event_persistence_callback = event_persistence_callback
         self._counts = {event_type: 0 for event_type in EVENT_MODULES}
         self._seen: dict[str, set[str]] = defaultdict(set)
+        self._seen_times: dict[str, dict[str, float]] = {
+            event_type: {} for event_type in EVENT_MODULES
+        }
+        self._observation_times: dict[str, deque[float]] = {
+            event_type: deque() for event_type in EVENT_MODULES
+        }
         self._events: list[dict[str, Any]] = []
         self._history_error: str | None = None
+        self._persistence_status = "NOT_CONFIGURED"
         self._lock = RLock()
         self._history_lock = Lock()
         self._historical_events = self._load_historical_events()
@@ -86,6 +134,31 @@ class ProctoringEventEngine:
         with self._lock:
             return self._history_error
 
+    @property
+    def persistence_status(self) -> str:
+        with self._lock:
+            return self._persistence_status
+
+    def _expire_observations(
+        self,
+        event_type: str,
+        now_monotonic: float,
+    ) -> None:
+        observations = self._observation_times[event_type]
+        cutoff = now_monotonic - self.confirmation_window_seconds
+        while observations and observations[0] < cutoff:
+            observations.popleft()
+        self._counts[event_type] = len(observations)
+        seen_times = self._seen_times[event_type]
+        expired_ids = [
+            observation_id
+            for observation_id, observed_at in seen_times.items()
+            if observed_at < cutoff
+        ]
+        for observation_id in expired_ids:
+            seen_times.pop(observation_id, None)
+            self._seen[event_type].discard(observation_id)
+
     def observe(
         self,
         event_type: str,
@@ -100,13 +173,29 @@ class ProctoringEventEngine:
             raise ValueError("Model output must be a dictionary.")
 
         safe_output = json.loads(json.dumps(model_output, allow_nan=False))
+        now_monotonic = time.monotonic()
+        now = datetime.now().astimezone()
         with self._lock:
+            self._expire_observations(event_type, now_monotonic)
             seen = self._seen[event_type]
             if observation_id in seen:
+                return None
+            minimum_interval = self.minimum_observation_intervals.get(
+                event_type,
+                0.0,
+            )
+            observations = self._observation_times[event_type]
+            if (
+                minimum_interval > 0.0
+                and observations
+                and now_monotonic - observations[-1] < minimum_interval
+            ):
                 return None
             if self._counts[event_type] >= self.confirmation_observations:
                 return None
             seen.add(observation_id)
+            self._seen_times[event_type][observation_id] = now_monotonic
+            observations.append(now_monotonic)
             self._counts[event_type] += 1
             count = self._counts[event_type]
             event = {
@@ -115,7 +204,7 @@ class ProctoringEventEngine:
                 "event_type": event_type,
                 "observation_id": observation_id,
                 "observation_count": count,
-                "timestamp": datetime.now().astimezone().isoformat(
+                "timestamp": now.isoformat(
                     timespec="milliseconds"
                 ),
                 "model_output": safe_output,
@@ -128,24 +217,39 @@ class ProctoringEventEngine:
             self._events.append(event)
             returned_event = self._copy_events([event])[0]
 
+        history_write_succeeded = True
+        database_write_succeeded = True
+        has_destination = False
         if self.history_path is not None:
+            has_destination = True
             try:
                 with self._history_lock:
                     self._append_history(event)
             except OSError as exc:
+                history_write_succeeded = False
                 with self._lock:
                     self._history_error = (
                         f"Could not persist event history to {self.history_path}: "
-                        f"{exc}"
+                        f"{type(exc).__name__}: {exc}"
                     )
         if self.event_persistence_callback is not None:
+            has_destination = True
             try:
                 self.event_persistence_callback(returned_event)
             except Exception as exc:
+                database_write_succeeded = False
                 with self._lock:
                     self._history_error = (
-                        f"Could not persist event history to the database: {exc}"
+                        f"Could not persist event history to the database: "
+                        f"{type(exc).__name__}: {exc}"
                     )
+        with self._lock:
+            if not has_destination:
+                self._persistence_status = "NOT_CONFIGURED"
+            elif history_write_succeeded and database_write_succeeded:
+                self._persistence_status = "PERSISTED"
+            else:
+                self._persistence_status = "FAILED"
         return returned_event
 
     def _load_historical_events(self) -> list[dict[str, Any]]:

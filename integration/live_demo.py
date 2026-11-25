@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -91,6 +92,14 @@ def _print(message: str) -> None:
 
 def _print_event(event: dict[str, Any]) -> None:
     _print("EVENT " + json.dumps(event, allow_nan=False, separators=(",", ":")))
+
+
+def _log_history_persistence_error(event_engine: ProctoringEventEngine) -> None:
+    if event_engine.history_error:
+        _print(
+            "EVENT HISTORY ERROR | "
+            f"{event_engine.history_error}"
+        )
 
 
 def load_candidate_read_only(
@@ -667,6 +676,8 @@ class AudioWorkerState:
         return status in {
             "MICROPHONE RECOVERING",
             "MICROPHONE ERROR",
+            "MICROPHONE DISCONNECTED",
+            "MICROPHONE STARTUP TIMEOUT",
             "AUDIO WORKER ERROR",
             "MICROPHONE OFF",
         }
@@ -978,6 +989,7 @@ class AudioWorkerState:
                 "MICROPHONE OFF",
                 "MICROPHONE ERROR",
                 "AUDIO WORKER ERROR",
+                "MICROPHONE DISCONNECTED",
             }:
                 self._status = "AUDIO WORKER ERROR"
                 self._error = f"Audio worker exited unexpectedly ({return_code})."
@@ -1117,7 +1129,11 @@ class AudioWorkerClient:
         self._reader.start()
 
     def _read_output(self) -> None:
-        if self.process is None or self.process.stdout is None:
+        if self.process is None:
+            return
+        if self.process.stdout is None:
+            _print("AUDIO WORKER PROTOCOL ERROR | worker stdout is unavailable")
+            self.state.mark_worker_exit(self.process.poll())
             return
         for line in self.process.stdout:
             line = line.rstrip("\r\n")
@@ -1701,6 +1717,18 @@ def render_frame(
         _COLORS["background"],
         dtype=np.uint8,
     )
+    if event_engine.history_error:
+        cv2_module.rectangle(canvas, (16, 0), (1264, 30), _COLORS["red"], -1)
+        _put_fitted_text(
+            cv2_module,
+            canvas,
+            "PERSISTENCE FAILED — EVENT DETECTED BUT HISTORY NOT PERSISTED: "
+            + event_engine.history_error,
+            (24, 20),
+            1232,
+            _COLORS["white"],
+            0.34,
+        )
     cv2_module.rectangle(
         canvas, (0, 0), (_DASHBOARD_WIDTH, 56), _COLORS["header"], -1
     )
@@ -2248,10 +2276,7 @@ class LiveProctoringDemo:
                         latest_reported_history_error = (
                             self.event_engine.history_error
                         )
-                        _print(
-                            "EVENT HISTORY ERROR | "
-                            f"{latest_reported_history_error}"
-                        )
+                        _log_history_persistence_error(self.event_engine)
                     if key in {ord("q"), ord("Q"), 27}:
                         break
                     key_text = chr(key) if 0 <= key < 128 else ""
@@ -2348,27 +2373,35 @@ def main(argv: list[str] | None = None) -> int:
     def persist_event(event: dict[str, Any]) -> None:
         if session_id is None:
             return
-        model_output = event["model_output"]
-        model_score = model_output.get("confidence")
-        if model_score is None:
-            model_score = model_output.get("score")
-        if model_score is None:
-            model_score = model_output.get("similarity")
-        if not isinstance(model_score, (int, float)):
-            model_score = None
-        storage.record_proctoring_event(
-            event_id=str(uuid.uuid4()),
-            session_id=session_id,
-            student_id=candidate["candidate_id"],
-            event_type=event["event_type"],
-            module=event["module"],
-            observation_id=event["observation_id"],
-            observation_count=event["observation_count"],
-            timestamp=event["timestamp"],
-            model_score=float(model_score) if model_score is not None else None,
-            status=event["status"],
-            reason=model_output.get("reason"),
-        )
+        try:
+            model_output = event["model_output"]
+            model_score = model_output.get("confidence")
+            if model_score is None:
+                model_score = model_output.get("score")
+            if model_score is None:
+                model_score = model_output.get("similarity")
+            if not isinstance(model_score, (int, float)):
+                model_score = None
+            storage.record_proctoring_event(
+                event_id=str(uuid.uuid4()),
+                session_id=session_id,
+                student_id=candidate["candidate_id"],
+                event_type=event["event_type"],
+                module=event["module"],
+                observation_id=event["observation_id"],
+                observation_count=event["observation_count"],
+                timestamp=event["timestamp"],
+                model_score=float(model_score) if model_score is not None else None,
+                status=event["status"],
+                reason=model_output.get("reason"),
+            )
+        except Exception as exc:
+            diagnostic = traceback.format_exc()
+            _print(
+                "EVENT DATABASE PERSISTENCE ERROR | "
+                f"{type(exc).__name__}: {exc}\n{diagnostic}",
+            )
+            raise
 
     event_engine = ProctoringEventEngine(
         session_id=session_id,

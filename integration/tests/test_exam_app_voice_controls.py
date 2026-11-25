@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+from pathlib import Path
 
-from integration.exam_app import ExamEngineApp
+from integration.exam_app import (
+    ExamEngineApp,
+    _resolve_audio_python,
+)
+from integration.config import AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS
 
 
 class FakeVariable:
@@ -71,6 +78,273 @@ class FakeStorage:
 
 
 class ExamAppVoiceControlTests(unittest.TestCase):
+    def make_probe_process(
+        self,
+        *,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        communicate=None,
+    ) -> SimpleNamespace:
+        process = SimpleNamespace(
+            returncode=returncode,
+            communicate=communicate
+            or (lambda **_kwargs: (stdout, stderr)),
+            killed=False,
+            poll=lambda: process.returncode,
+        )
+
+        def kill():
+            process.killed = True
+            process.returncode = -9
+
+        process.kill = kill
+        process.wait = lambda **_kwargs: process.returncode
+        return process
+
+    def test_probe_accepts_interpreter_with_mandatory_audio_dependencies(self):
+        from integration.exam_app import _probe_audio_interpreter
+
+        communicate_timeouts = []
+
+        def finish_probe(*, timeout):
+            communicate_timeouts.append(timeout)
+            return "", ""
+
+        process = self.make_probe_process(communicate=finish_probe)
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=True),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch(
+                "integration.exam_app.subprocess.Popen",
+                return_value=process,
+            ) as popen,
+        ):
+            valid, error = _probe_audio_interpreter(
+                r"C:\portable\audio311\python.exe"
+            )
+
+        self.assertTrue(valid)
+        self.assertEqual(error, "")
+        self.assertEqual(
+            popen.call_args.kwargs["stdout"],
+            subprocess.PIPE,
+        )
+        self.assertEqual(
+            popen.call_args.kwargs["stderr"],
+            subprocess.PIPE,
+        )
+        self.assertEqual(communicate_timeouts, [AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS])
+        probe_script = popen.call_args.args[0][2]
+        for module_name in (
+            "numpy",
+            "sounddevice",
+            "torch",
+            "torchaudio",
+            "soundfile",
+            "tensorflow",
+            "tensorflow_hub",
+            "silero_vad",
+            "speechbrain",
+            "huggingface_hub",
+        ):
+            self.assertIn(module_name, probe_script)
+
+    def test_probe_allows_slow_import_probe_that_exceeds_old_12_second_limit(self):
+        from integration.exam_app import _probe_audio_interpreter
+
+        calls = []
+        simulated_elapsed_seconds = []
+
+        def delayed_import_probe(*, timeout):
+            calls.append(timeout)
+            if timeout <= 12:
+                raise subprocess.TimeoutExpired("probe", timeout)
+            simulated_elapsed_seconds.append(13.0)
+            return "", ""
+
+        process = self.make_probe_process(communicate=delayed_import_probe)
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=True),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch("integration.exam_app.subprocess.Popen", return_value=process),
+        ):
+            valid, error = _probe_audio_interpreter(
+                r"C:\portable\audio311\python.exe"
+            )
+
+        self.assertTrue(valid)
+        self.assertEqual(error, "")
+        self.assertEqual(calls, [60.0])
+        self.assertEqual(simulated_elapsed_seconds, [13.0])
+
+    def test_probe_timeout_kills_and_reaps_process_and_reports_candidate(self):
+        from integration.exam_app import _probe_audio_interpreter
+
+        communicate_calls = []
+
+        def timeout_then_reap(*, timeout=None):
+            communicate_calls.append(timeout)
+            if timeout == AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS:
+                raise subprocess.TimeoutExpired(
+                    "probe",
+                    timeout,
+                    output="partial stdout",
+                    stderr="partial stderr",
+                )
+            return "captured stdout", "captured stderr"
+
+        process = self.make_probe_process(communicate=timeout_then_reap)
+        process.returncode = None
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=True),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch("integration.exam_app.subprocess.Popen", return_value=process),
+        ):
+            valid, error = _probe_audio_interpreter(
+                r"C:\portable\audio311\python.exe"
+            )
+
+        self.assertFalse(valid)
+        self.assertTrue(process.killed)
+        self.assertEqual(
+            communicate_calls,
+            [AUDIO_INTERPRETER_PROBE_TIMEOUT_SECONDS, 5],
+        )
+        self.assertIn("timed out after 60 seconds", error)
+        self.assertIn(r"C:\portable\audio311\python.exe", error)
+        self.assertIn("exit code -9", error)
+        self.assertIn("captured stdout", error)
+        self.assertIn("captured stderr", error)
+
+    def test_probe_reports_missing_mandatory_audio_dependency(self):
+        from integration.exam_app import _probe_audio_interpreter
+
+        process = self.make_probe_process(
+            returncode=1,
+            stdout=(
+                "MISSING MANDATORY AUDIO DEPENDENCIES: "
+                "tensorflow_hub: ModuleNotFoundError: missing"
+            ),
+        )
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=True),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch(
+                "integration.exam_app.subprocess.Popen",
+                return_value=process,
+            ),
+        ):
+            valid, error = _probe_audio_interpreter(
+                r"C:\portable\audio311\python.exe"
+            )
+
+        self.assertFalse(valid)
+        self.assertIn("tensorflow_hub", error)
+        self.assertIn("ModuleNotFoundError", error)
+
+    def test_invalid_configured_interpreter_and_fallbacks_report_no_candidate(self):
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=False),
+            patch("integration.exam_app.os.access", return_value=False),
+            patch("integration.exam_app._probe_audio_interpreter",
+                  return_value=(False, "mandatory dependency missing")),
+            patch.dict(
+                "integration.exam_app.os.environ",
+                {"EXAM_AUDIO_PYTHON": r"C:\invalid\python.exe"},
+                clear=True,
+            ),
+        ):
+            resolved, error = _resolve_audio_python()
+
+        self.assertIsNone(resolved)
+        self.assertIn(r"C:\invalid\python.exe", error)
+        self.assertIn("mandatory dependency missing", error)
+
+    def test_missing_environment_variable_still_uses_sys_executable_fallback(self):
+        with patch.dict(
+            "integration.exam_app.os.environ",
+            {},
+            clear=True,
+        ):
+            with (
+                patch("integration.exam_app.os.path.isfile", return_value=True),
+                patch("integration.exam_app.os.access", return_value=True),
+                patch(
+                    "integration.exam_app._probe_audio_interpreter",
+                    return_value=(True, ""),
+                ),
+            ):
+                resolved, error = _resolve_audio_python()
+
+        self.assertEqual(resolved, str(__import__("os").path.abspath(
+            __import__("sys").executable
+        )))
+        self.assertEqual(error, "")
+
+    def test_start_exam_reports_probe_timeout_before_creating_session(self):
+        app = ExamEngineApp.__new__(ExamEngineApp)
+        app.student_table = SimpleNamespace(selection=lambda: ("student-1",))
+        app.storage = SimpleNamespace(
+            is_fully_registered=lambda _student_id: True,
+            load_student=lambda _student_id: {"student_id": "student-1"},
+            create_exam_session=lambda *_args: self.fail(
+                "Exam session must not be created without a compatible interpreter."
+            ),
+        )
+        with (
+            patch(
+                "integration.exam_app._resolve_audio_python",
+                return_value=(
+                    None,
+                    "Interpreter probe timed out after 60 seconds.",
+                ),
+            ),
+            patch("integration.exam_app.messagebox.showerror") as showerror,
+            patch("integration.exam_app.subprocess.Popen") as popen,
+        ):
+            app.start_exam()
+
+        self.assertEqual(showerror.call_args.args[0], "Start Exam")
+        self.assertIn("timed out after 60 seconds", showerror.call_args.args[1])
+        self.assertIn("EXAM_AUDIO_PYTHON", showerror.call_args.args[1])
+        popen.assert_not_called()
+
+    def test_portable_audio_interpreter_resolution_prefers_configured_valid_path(self):
+        configured = r"C:\portable\audio311\python.exe"
+        with (
+            patch("integration.exam_app.os.path.isfile", return_value=True),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch(
+                "integration.exam_app._probe_audio_interpreter",
+                return_value=(True, ""),
+            ),
+        ):
+            resolved, error = _resolve_audio_python(configured)
+
+        self.assertTrue(resolved)
+        self.assertEqual(error, "")
+        self.assertTrue(resolved.endswith("python.exe"))
+
+    def test_configured_missing_interpreter_falls_back_portably(self):
+        configured = r"C:\missing\python.exe"
+        with (
+            patch("integration.exam_app.os.path.isfile", side_effect=lambda path: str(path).endswith("python.exe") and "missing" not in str(path)),
+            patch("integration.exam_app.os.access", return_value=True),
+            patch(
+                "integration.exam_app._probe_audio_interpreter",
+                side_effect=lambda path: (
+                    ("missing" not in path, "")
+                    if "missing" not in path
+                    else (False, "configured executable does not exist")
+                ),
+            ),
+        ):
+            resolved, error = _resolve_audio_python(configured)
+
+        self.assertTrue(resolved)
+        self.assertEqual(error, "")
+
     def make_app(self) -> tuple[ExamEngineApp, FakeProcess]:
         app = ExamEngineApp.__new__(ExamEngineApp)
         process = FakeProcess()

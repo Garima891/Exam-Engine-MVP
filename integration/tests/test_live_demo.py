@@ -126,6 +126,129 @@ def _audio_state_for_test(result, *, input_rms):
 
 
 class LiveDemoTests(unittest.TestCase):
+    def test_history_failure_is_visible_in_monitor_dashboard(self):
+        class RecordingCV2:
+            FONT_HERSHEY_SIMPLEX = cv2.FONT_HERSHEY_SIMPLEX
+            LINE_AA = cv2.LINE_AA
+            INTER_AREA = cv2.INTER_AREA
+
+            def __getattr__(self, name):
+                return getattr(cv2, name)
+
+            def putText(self, image, text, *args, **kwargs):
+                labels.append(str(text))
+                return cv2.putText(image, text, *args, **kwargs)
+
+        labels = []
+        with tempfile.TemporaryDirectory() as directory:
+            unavailable_destination = Path(directory) / "history.jsonl"
+            unavailable_destination.mkdir()
+            engine = ProctoringEventEngine(
+                session_id="history-failure",
+                history_path=unavailable_destination,
+            )
+
+            event = engine.observe(
+                "NO_FACE_DETECTED",
+                "frame:1",
+                {"total_faces": 0},
+            )
+
+            with patch("integration.live_demo._print") as printed:
+                from integration.live_demo import _log_history_persistence_error
+
+                _log_history_persistence_error(engine)
+
+            dashboard = render_frame(
+                RecordingCV2(),
+                np.zeros((80, 120, 3), dtype=np.uint8),
+                _pending_vision(),
+                AudioWorkerState().snapshot(),
+                engine,
+                "OPEN",
+            )
+
+        self.assertIsNotNone(event)
+        self.assertEqual(engine.persistence_status, "FAILED")
+        self.assertIn("Could not persist event history", engine.history_error)
+        self.assertTrue(
+            "PermissionError" in engine.history_error
+            or "IsADirectoryError" in engine.history_error
+        )
+        self.assertTrue(
+            any(
+                "PERSISTENCE FAILED" in label
+                and "HISTORY NOT PERSISTED" in label
+                for label in labels
+            )
+        )
+        logged = " ".join(str(call.args[0]) for call in printed.call_args_list)
+        self.assertIn("EVENT HISTORY ERROR", logged)
+        self.assertIn("Could not persist event history", logged)
+
+    def test_worker_unexpected_exit_clears_connected_stale_state(self):
+        state = AudioWorkerState()
+        state.apply(
+            {"type": "status", "status": "MICROPHONE ON"},
+            ProctoringEventEngine(),
+        )
+
+        state.mark_worker_exit(17)
+        snapshot = state.snapshot()
+
+        self.assertEqual(snapshot["status"], "AUDIO WORKER ERROR")
+        self.assertIn("unexpectedly (17)", snapshot["error"])
+        self.assertIsNone(snapshot["result"])
+        self.assertIsNone(snapshot["input_rms"])
+
+    def test_worker_reader_process_exit_clears_dashboard_connected_state(self):
+        from integration.live_demo import AudioWorkerClient
+
+        with tempfile.TemporaryDirectory() as directory:
+            interpreter = Path(directory) / "python.exe"
+            interpreter.touch()
+            state = AudioWorkerState()
+            state.apply(
+                {"type": "status", "status": "MICROPHONE ON"},
+                ProctoringEventEngine(),
+            )
+            state.apply(
+                {
+                    "type": "telemetry",
+                    "status": "MICROPHONE ON",
+                    "input_rms": 0.25,
+                    "callback_count": 40,
+                    "callback_age_seconds": 0.1,
+                },
+                ProctoringEventEngine(),
+            )
+            process = SimpleNamespace(
+                stdout=iter(()),
+                stdin=None,
+                poll=lambda: 23,
+                returncode=23,
+            )
+            with patch(
+                "integration.live_demo.subprocess.Popen",
+                return_value=process,
+            ):
+                client = AudioWorkerClient(
+                    interpreter,
+                    None,
+                    ProctoringEventEngine(),
+                    state,
+                )
+                client.start()
+                client._reader.join(timeout=1)
+
+        snapshot = state.snapshot()
+        display = _audio_dashboard_state(snapshot)
+        self.assertEqual(snapshot["status"], "AUDIO WORKER ERROR")
+        self.assertIn("unexpectedly (23)", snapshot["error"])
+        self.assertIsNone(snapshot["input_rms"])
+        self.assertIsNone(snapshot["result"])
+        self.assertEqual(display["microphone"], "ERROR")
+
     def test_test_scenarios_have_visible_number_keys(self):
         self.assertEqual(set(TEST_SCENARIOS), set("1234567890"))
         self.assertTrue(TEST_SCENARIOS["5"][0].startswith("5/10"))
@@ -138,16 +261,30 @@ class LiveDemoTests(unittest.TestCase):
         face = FakeFaceAdapter(face_result("MISMATCH"))
         engine = ProctoringEventEngine()
         logged = []
-
-        result = analyze_vision_frame(
-            frame,
-            7,
-            phone,
-            face,
-            candidate,
-            engine,
-            event_logger=logged.append,
-        )
+        clock = [0.0]
+        with patch(
+            "integration.proctoring_events.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            result = analyze_vision_frame(
+                frame,
+                7,
+                phone,
+                face,
+                candidate,
+                engine,
+                event_logger=logged.append,
+            )
+            clock[0] = 1.0
+            analyze_vision_frame(
+                frame,
+                7,
+                phone,
+                face,
+                candidate,
+                engine,
+                event_logger=logged.append,
+            )
 
         self.assertIs(phone.frames[0], frame)
         self.assertIs(face.frames[0], frame)
@@ -159,6 +296,7 @@ class LiveDemoTests(unittest.TestCase):
             result["candidate_identity_status"],
             "CANDIDATE NOT IDENTIFIED / UNMATCHED",
         )
+
         self.assertEqual(engine.counters["PHONE_DETECTED"], 1)
         self.assertEqual(engine.counters["IDENTITY_UNMATCHED"], 1)
         self.assertEqual(len(logged), 2)
@@ -274,20 +412,26 @@ class LiveDemoTests(unittest.TestCase):
     def test_audio_events_are_independent_deduplicated_and_confirm_at_five(self):
         engine = ProctoringEventEngine()
         logged = []
-        for window_id in range(1, 6):
-            result = process_audio_result(
-                window_id,
+        clock = [0.0]
+        with patch(
+            "integration.proctoring_events.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            for window_id in range(1, 6):
+                result = process_audio_result(
+                    window_id,
+                    audio_result(),
+                    engine,
+                    event_logger=logged.append,
+                )
+                self.assertEqual(result["status"], "VALID")
+                clock[0] += 1.0
+            process_audio_result(
+                5,
                 audio_result(),
                 engine,
                 event_logger=logged.append,
             )
-            self.assertEqual(result["status"], "VALID")
-        process_audio_result(
-            5,
-            audio_result(),
-            engine,
-            event_logger=logged.append,
-        )
 
         self.assertEqual(engine.counters["UNKNOWN_HUMAN_VOICE"], 5)
         self.assertEqual(engine.counters["SUSPICIOUS_AUDIO_SOUND"], 5)
@@ -298,6 +442,32 @@ class LiveDemoTests(unittest.TestCase):
             [event["status"] for event in logged[-2:]],
             ["CONFIRMED", "CONFIRMED"],
         )
+
+    def test_repeated_audio_window_does_not_count_twice_after_interval(self):
+        engine = ProctoringEventEngine()
+        logged = []
+        clock = [0.0]
+        with patch(
+            "integration.proctoring_events.time.monotonic",
+            side_effect=lambda: clock[0],
+        ):
+            process_audio_result(
+                1,
+                audio_result(),
+                engine,
+                event_logger=logged.append,
+            )
+            clock[0] = 1.0
+            process_audio_result(
+                1,
+                audio_result(),
+                engine,
+                event_logger=logged.append,
+            )
+
+        self.assertEqual(engine.counters["UNKNOWN_HUMAN_VOICE"], 1)
+        self.assertEqual(engine.counters["SUSPICIOUS_AUDIO_SOUND"], 1)
+        self.assertEqual(len(logged), 2)
 
     def test_incomplete_speaker_reference_and_inert_scores_do_not_count(self):
         engine = ProctoringEventEngine()
@@ -718,12 +888,18 @@ class LiveDemoTests(unittest.TestCase):
                 session_id="previous-session-id",
                 history_path=history_path,
             )
-            for index in range(5):
-                previous.observe(
-                    "PHONE_DETECTED",
-                    f"previous-frame:{index}",
-                    {"confidence": 0.8},
-                )
+            clock = [0.0]
+            with patch(
+                "integration.proctoring_events.time.monotonic",
+                side_effect=lambda: clock[0],
+            ):
+                for index in range(5):
+                    previous.observe(
+                        "PHONE_DETECTED",
+                        f"previous-frame:{index}",
+                        {"confidence": 0.8},
+                    )
+                    clock[0] += 1.0
             current = ProctoringEventEngine(
                 session_id="current-session-id",
                 history_path=history_path,
@@ -894,6 +1070,7 @@ class LiveDemoTests(unittest.TestCase):
                 client._reader.join(timeout=1)
 
             command = popen.call_args.args[0]
+            self.assertEqual(command[0], str(interpreter.resolve()))
             self.assertNotIn("--audio-reference", command)
 
     def test_audio_worker_start_error_does_not_stop_vision(self):

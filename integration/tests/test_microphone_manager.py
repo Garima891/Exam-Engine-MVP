@@ -156,6 +156,46 @@ class MicrophoneManagerTests(unittest.TestCase):
 
         self.assertTrue(stream.closed)
 
+    def test_finished_callback_reports_stream_disconnection(self):
+        stream = FakeInputStream(callbacks=[(audio_block([0.1]), None)])
+        manager = MicrophoneManager(
+            input_stream_factory=lambda **kwargs: self._configure(stream, kwargs)
+        )
+        manager.open()
+        try:
+            manager._finished_callback()
+            with self.assertRaisesRegex(
+                MicrophoneStreamError,
+                "stopped unexpectedly",
+            ):
+                manager.read(timeout=0.1)
+        finally:
+            manager.close()
+
+    def test_stream_error_clears_stale_callback_data(self):
+        stream = FakeInputStream(callbacks=[(audio_block([0.1]), None)])
+        manager = MicrophoneManager(
+            input_stream_factory=lambda **kwargs: self._configure(stream, kwargs)
+        )
+        manager.open()
+
+        manager._record_error(
+            MicrophoneStreamError("microphone device disconnected")
+        )
+
+        self.assertEqual(manager.callback_count, 0)
+        self.assertIsNone(manager.seconds_since_last_callback)
+        self.assertEqual(manager.last_input_rms, 0.0)
+        self.assertIsNone(manager.last_input_min)
+        self.assertIsNone(manager.last_input_max)
+        with self.assertRaisesRegex(
+            MicrophoneStreamError,
+            "microphone device disconnected",
+        ):
+            manager.read(timeout=0.1)
+
+        self.assertTrue(stream.closed)
+
     def test_queue_overflow_discards_stale_audio_and_keeps_stream_open(self):
         first_block = audio_block([0.1])
         latest_block = audio_block([0.2])

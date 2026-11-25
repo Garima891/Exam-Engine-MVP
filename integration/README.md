@@ -23,6 +23,16 @@ $env:EXAM_AUDIO_PYTHON = "C:\path\to\exam-engine-audio311\Scripts\python.exe"
 .venv\Scripts\python.exe -m integration.exam_app
 ```
 
+The selected audio interpreter must provide the mandatory runtime modules
+`numpy`, `sounddevice`, `torch`, `torchaudio`, `soundfile`, `tensorflow`,
+`tensorflow_hub`, `silero_vad`, `speechbrain`, and `huggingface_hub`.
+Startup validates these imports before launching the live audio worker and
+reports the missing module and import exception as a clear audio-environment
+error. Each interpreter dependency probe is bounded to 60 seconds to allow
+first-time imports of PyTorch and TensorFlow; timed-out probes are terminated
+and reaped, and that interpreter is not selected. Model caches are still
+required for live inference; the worker does not download models on startup.
+
 From Registered Students, select only a fully registered student and choose
 Start Exam. The app creates a database-backed session and launches the existing
 live OpenCV dashboard with that student's three face references and one voice
